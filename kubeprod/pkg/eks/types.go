@@ -30,14 +30,25 @@ type ExternalDNSConfig struct {
 	AWSSecretAccessKey string `json:"aws_secret_access_key"`
 }
 
+// Config required by mariadb galera
+type MariaDBGaleraConfig struct {
+	RootPassword        string `json:"root_password"`
+	MariaBackupPassword string `json:"mariabackup_password"`
+}
+
+// Config options required by keycloak
+type KeycloakConfig struct {
+	DatabasePassword string `json:"db_password"`
+	Password         string `json:"admin_password"`
+	ClientID         string `json:"client_id"`
+	ClientSecret     string `json:"client_secret"`
+	Group            string `json:"group"`
+}
+
 // Config options required by oauth2-proxy
 type OauthProxyConfig struct {
-	//AuthzDomain   string `json:"authz_domain"`
-	ClientID      string `json:"client_id"`
-	ClientSecret  string `json:"client_secret"`
-	CookieSecret  string `json:"cookie_secret"`
-	AWSRegion     string `json:"aws_region"`
-	AWSUserPoolID string `json:"aws_user_pool_id"`
+	AuthzDomain  string `json:"authz_domain"`
+	CookieSecret string `json:"cookie_secret"`
 }
 
 // Local config required for EKS platforms
@@ -47,8 +58,10 @@ type Config struct {
 	session *session.Session
 
 	// TODO: Promote this to a proper (versioned) k8s Object
-	DNSZone      string            `json:"dnsZone"`
-	ContactEmail string            `json:"contactEmail"`
-	ExternalDNS  ExternalDNSConfig `json:"externalDns"`
-	OauthProxy   OauthProxyConfig  `json:"oauthProxy"`
+	DNSZone       string              `json:"dnsZone"`
+	ContactEmail  string              `json:"contactEmail"`
+	ExternalDNS   ExternalDNSConfig   `json:"externalDns"`
+	OauthProxy    OauthProxyConfig    `json:"oauthProxy"`
+	Keycloak      KeycloakConfig      `json:"keycloak"`
+	MariaDBGalera MariaDBGaleraConfig `json:"mariadbGalera"`
 }

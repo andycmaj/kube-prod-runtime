@@ -32,7 +32,9 @@ const (
 	flagDNSSuffix          = "dns-zone"
 	flagAWSAccessKeyID     = "access-key-id"
 	flagAWSSecretAccessKey = "secret-access-key"
-	flagAWSUserPoolID      = "user-pool-id"
+	flagAuthzDomain        = "authz-domain"
+	flagKeycloakPassword   = "keycloak-password"
+	flagKeycloakGroup      = "keycloak-group"
 )
 
 var eksCmd = &cobra.Command{
@@ -56,5 +58,10 @@ func init() {
 	eksCmd.PersistentFlags().String(flagDNSSuffix, "", "External DNS zone for public endpoints")
 	eksCmd.PersistentFlags().String(flagAWSAccessKeyID, "", "Access key ID for External DNS integration")
 	eksCmd.PersistentFlags().String(flagAWSSecretAccessKey, "", "Secret access key for External DNS integration")
-	eksCmd.PersistentFlags().String(flagAWSUserPoolID, "", "User Poold ID from AWS Cognito for OAuth2 Proxy integration")
+	eksCmd.PersistentFlags().String(flagAuthzDomain, "", "Restrict authorized users to this Google email domain")
+	eksCmd.PersistentFlags().String(flagKeycloakGroup, "", "Restrict authorized users to this Keycloak group")
+	eksCmd.PersistentFlags().String(flagKeycloakPassword, "", "Password for Keycloak admin user")
+	eksCmd.MarkPersistentFlagRequired(flagAuthzDomain)
+	eksCmd.MarkPersistentFlagRequired(flagKeycloakGroup)
+	eksCmd.MarkPersistentFlagRequired(flagKeycloakPassword)
 }

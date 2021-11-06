@@ -29,9 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/arn"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
-	"github.com/aws/aws-sdk-go/aws/endpoints"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/aws/aws-sdk-go/service/route53"
 	"github.com/aws/aws-sdk-go/service/sts"
@@ -300,125 +298,6 @@ func (conf *Config) setUpExternalDNS(ctx context.Context) error {
 	return nil
 }
 
-// Retrieves information from an existing client application in AWS Cognito
-func (conf *Config) describeUserPoolClient(ctx context.Context, svc *cognitoidentityprovider.CognitoIdentityProvider, clientID, userPoolID string) (*cognitoidentityprovider.UserPoolClientType, error) {
-	result, err := svc.DescribeUserPoolClientWithContext(ctx, &cognitoidentityprovider.DescribeUserPoolClientInput{
-		ClientId:   aws.String(clientID),
-		UserPoolId: aws.String(userPoolID),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Error getting information from client application %s: %v", clientID, err)
-	}
-	return result.UserPoolClient, nil
-}
-
-// Creates a new client application (or reuses the existing one) in Cognito
-// for integration between OAuth2 Proxy and the AWS Cognito User Pool. The
-// client application is amed like "bbkpr-${dnsZone}" and will be enabled to
-// be used for OpenID Connect.
-func (conf *Config) getUserPoolClient(ctx context.Context, svc *cognitoidentityprovider.CognitoIdentityProvider, userPoolID string) (*cognitoidentityprovider.UserPoolClientType, error) {
-	input := &cognitoidentityprovider.ListUserPoolClientsInput{
-		MaxResults: aws.Int64(60),
-		UserPoolId: aws.String(userPoolID),
-	}
-
-	// Find whether a client application named like "bkpr-${dnsZone}" already exists
-	// in the user pool...
-	clientName := fmt.Sprintf("bkpr-%s", conf.DNSZone)
-	for {
-		result, err := svc.ListUserPoolClientsWithContext(ctx, input)
-		if err != nil {
-			return nil, fmt.Errorf("Error retrieving client applications for user pool ID %s: %v", userPoolID, err)
-		}
-		for _, element := range result.UserPoolClients {
-			if *element.ClientName == clientName {
-				userPoolClient, err := conf.describeUserPoolClient(ctx, svc, *element.ClientId, userPoolID)
-				if err != nil {
-					return nil, err
-				}
-				log.Warningf("Re-using existing client in user pool '%s' for OAuth2 proxy integration: %s", userPoolID, *userPoolClient.ClientId)
-				return userPoolClient, nil
-			}
-		}
-		if result.NextToken == nil {
-			break
-		}
-		input.NextToken = result.NextToken
-	}
-
-	// No client application named like "bkpr-${dnsZone)" was found, so try to
-	// create a new one
-	result, err := svc.CreateUserPoolClientWithContext(ctx, &cognitoidentityprovider.CreateUserPoolClientInput{
-		ClientName:                      aws.String(clientName),
-		AllowedOAuthFlowsUserPoolClient: aws.Bool(true),
-		GenerateSecret:                  aws.Bool(true),
-		UserPoolId:                      aws.String(userPoolID),
-		AllowedOAuthFlows:               []*string{aws.String("code")},
-		AllowedOAuthScopes: []*string{
-			aws.String("email"),
-			aws.String("openid"),
-			aws.String("profile"),
-		},
-		CallbackURLs: []*string{
-			aws.String(fmt.Sprintf("https://auth.%s/oauth2/callback", conf.DNSZone)),
-		},
-		SupportedIdentityProviders: []*string{
-			aws.String("COGNITO"),
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Error creating client: %v", err)
-	}
-	log.Infof("Created new client in user pool '%s' for OAuth2 proxy integration: %s", userPoolID, *result.UserPoolClient.ClientId)
-	return result.UserPoolClient, nil
-}
-
-// Returns whether the AWS region is a valid region for the Cognito IDP service
-func (conf *Config) isValidRegion(region string) bool {
-	rs := endpoints.AwsPartition().Services()[endpoints.CognitoIdpServiceID].Regions()
-	_, ok := rs[region]
-	return ok
-}
-
-// Configuration for integration between OAuth2 Proxy and AWS Cognito.
-func (conf *Config) setUpOAuth2Proxy(ctx context.Context) error {
-	if conf.OauthProxy.ClientID == "" || conf.OauthProxy.ClientSecret == "" {
-		log.Info("Setting up configuration for OAuth2 Proxy")
-
-		session := conf.getAwsSession()
-
-		if conf.OauthProxy.AWSRegion == "" {
-			// Configure the AWS region
-			conf.OauthProxy.AWSRegion = *session.Config.Region
-			if !conf.isValidRegion(conf.OauthProxy.AWSRegion) {
-				return fmt.Errorf("AWS region '%s' is not a valid region for the Cognito IDP service", conf.OauthProxy.AWSRegion)
-			}
-		}
-
-		// Configure client ID and client secret required for OAuth2 proxy integration with Cognito
-		svc := cognitoidentityprovider.New(session)
-		userPoolClient, err := conf.getUserPoolClient(ctx, svc, conf.OauthProxy.AWSUserPoolID)
-		if err != nil {
-			return err
-		}
-		conf.OauthProxy.ClientID = *userPoolClient.ClientId
-		conf.OauthProxy.ClientSecret = *userPoolClient.ClientSecret
-	}
-
-	if conf.OauthProxy.CookieSecret == "" {
-		// I Quote: cookie_secret must be 16, 24, or 32 bytes
-		// to create an AES cipher when pass_access_token ==
-		// true or cookie_refresh != 0
-		secret, err := tools.Base64RandBytes(24)
-		if err != nil {
-			return err
-		}
-		conf.OauthProxy.CookieSecret = secret
-	}
-
-	return nil
-}
-
 // Generate platform configuration
 func (conf *Config) Generate(ctx context.Context) error {
 	flags := conf.flags
@@ -449,22 +328,73 @@ func (conf *Config) Generate(ctx context.Context) error {
 		}
 	}
 
-	if conf.OauthProxy.AWSUserPoolID == "" {
-		userPoolID, err := flags.GetString(flagAWSUserPoolID)
+	// mariadb setup
+	log.Debug("Starting mariadb galera setup")
+	if conf.MariaDBGalera.RootPassword == "" {
+		rand, err := tools.Base64RandBytes(24)
 		if err != nil {
 			return err
 		}
-		conf.OauthProxy.AWSUserPoolID = userPoolID
+		conf.MariaDBGalera.RootPassword = rand
+	}
+
+	if conf.MariaDBGalera.MariaBackupPassword == "" {
+		rand, err := tools.Base64RandBytes(24)
+		if err != nil {
+			return err
+		}
+		conf.MariaDBGalera.MariaBackupPassword = rand
+	}
+
+	// keycloak setup
+	log.Debug("Starting keycloak setup")
+
+	if conf.Keycloak.DatabasePassword == "" {
+		rand, err := tools.Base64RandBytes(24)
+		if err != nil {
+			return err
+		}
+		conf.Keycloak.DatabasePassword = rand
+	}
+
+	if conf.Keycloak.Password == "" {
+		password, err := flags.GetString(flagKeycloakPassword)
+		if err != nil {
+			return err
+		}
+		conf.Keycloak.Password = password
+	}
+
+	if conf.Keycloak.ClientID == "" {
+		conf.Keycloak.ClientID = "bkpr"
+	}
+
+	if conf.Keycloak.ClientSecret == "" {
+		conf.Keycloak.ClientSecret = uuid.New().String()
 	}
 
 	//
 	// oauth2-proxy setup
 	//
-	if conf.OauthProxy.AWSUserPoolID != "" {
-		err := conf.setUpOAuth2Proxy(ctx)
+	log.Debug("Starting oauth2-proxy setup")
+
+	if conf.OauthProxy.CookieSecret == "" {
+		// I Quote: cookie_secret must be 16, 24, or 32 bytes
+		// to create an AES cipher when pass_access_token ==
+		// true or cookie_refresh != 0
+		secret, err := tools.Base64RandBytes(24)
 		if err != nil {
 			return err
 		}
+		conf.OauthProxy.CookieSecret = secret
+	}
+
+	if conf.OauthProxy.AuthzDomain == "" {
+		domain, err := flags.GetString(flagAuthzDomain)
+		if err != nil {
+			return err
+		}
+		conf.OauthProxy.AuthzDomain = domain
 	}
 
 	return nil
