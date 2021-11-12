@@ -159,7 +159,7 @@ local grafana = import "../components/grafana.jsonnet";
   },
 
   keycloak: keycloak {
-    galera: $.galera,
+    galera:: $.galera,
     oauth2_proxy:: $.oauth2_proxy,
     secret+: {
       data_+: $.config.keycloak,
